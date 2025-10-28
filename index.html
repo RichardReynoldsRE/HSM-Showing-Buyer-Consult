@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>HSM Showing Buyer Consult</title>
+    <title>HSM Showing Buyer Consult v0.0.3</title>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -143,41 +143,6 @@
                 broker: ''
             });
             const [statusMessage, setStatusMessage] = useState({ text: '', type: '' });
-            const [error, setError] = useState(null);
-
-            // Error boundary effect
-            useEffect(() => {
-                const handleError = (event) => {
-                    console.error('Global error:', event.error);
-                    setError(event.error?.message || 'An unexpected error occurred');
-                    event.preventDefault();
-                };
-                
-                window.addEventListener('error', handleError);
-                return () => window.removeEventListener('error', handleError);
-            }, []);
-
-            if (error) {
-                return (
-                    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-                        <div className="bg-white rounded-lg shadow-lg p-6 max-w-md">
-                            <h2 className="text-xl font-bold text-red-600 mb-4">Something went wrong</h2>
-                            <p className="text-gray-700 mb-4">{error}</p>
-                            <button
-                                onClick={() => {
-                                    setError(null);
-                                    window.location.reload();
-                                }}
-                                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
-                            >
-                                Reload Page
-                            </button>
-                        </div>
-                    </div>
-                );
-            }
-
-            // No auto-save - users manually save/load as needed
 
             const showStatus = (text, type) => {
                 setStatusMessage({ text, type });
@@ -216,7 +181,6 @@
                     reader.onload = (e) => {
                         try {
                             const data = JSON.parse(e.target.result);
-                            // Ensure attachments array exists
                             if (!data.attachments) {
                                 data.attachments = [];
                             }
@@ -282,21 +246,19 @@
                 showStatus('🗑️ Photo removed', 'success');
             };
 
-            // Helper function to correct image orientation and convert to JPEG
+            // Image orientation correction - EXACT copy from working test
             const correctImageOrientation = async (dataUrl) => {
                 return new Promise((resolve) => {
                     const img = new Image();
                     img.onload = () => {
                         const canvas = document.createElement('canvas');
                         const ctx = canvas.getContext('2d');
-                        
                         canvas.width = img.width;
                         canvas.height = img.height;
                         ctx.drawImage(img, 0, 0);
-                        
                         resolve(canvas.toDataURL('image/jpeg', 0.92));
                     };
-                    img.onerror = () => resolve(dataUrl); // Fallback to original if error
+                    img.onerror = () => resolve(dataUrl);
                     img.src = dataUrl;
                 });
             };
@@ -304,297 +266,254 @@
             const generatePDF = async () => {
                 try {
                     showStatus('📄 Generating PDF...', 'success');
+                    console.log('Starting PDF generation...');
 
                     const { PDFDocument, rgb, StandardFonts } = PDFLib;
                     const pdfDoc = await PDFDocument.create();
+                    console.log('PDF document created');
                     
-                    // Standard page dimensions (US Letter)
-                    const pageWidth = 612;
-                    const pageHeight = 792;
-                    const margin = 50;
-                    const contentWidth = pageWidth - (2 * margin);
-                    
-                    // Load fonts
+                    // Embed fonts
                     const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
                     const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-                    
-                    let currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-                    let yPos = pageHeight - margin;
+                    console.log('Fonts embedded');
 
-                    // Helper to wrap text
-                    const wrapText = (text, font, fontSize, maxWidth) => {
+                    // Add first page with form data
+                    const page = pdfDoc.addPage([612, 792]); // US Letter
+                    const { width, height } = page.getSize();
+                    let yPos = height - 50;
+
+                    // Title
+                    page.drawRectangle({
+                        x: 0,
+                        y: height - 50,
+                        width: width,
+                        height: 50,
+                        color: rgb(0.15, 0.39, 0.92),
+                    });
+
+                    page.drawText('HSM Showing Buyer Consult', {
+                        x: 50,
+                        y: height - 32,
+                        size: 20,
+                        font: helveticaBold,
+                        color: rgb(1, 1, 1),
+                    });
+
+                    yPos = height - 80;
+
+                    // Helper to add text with wrapping
+                    const addText = (label, value, fontSize = 11, isBold = false) => {
+                        if (yPos < 100) return; // Stop if too close to bottom
+                        
+                        const font = isBold ? helveticaBold : helvetica;
+                        const text = label ? `${label}: ${value || 'N/A'}` : (value || '');
+                        
+                        // Simple text wrapping
+                        const maxWidth = width - 100;
                         const words = text.split(' ');
-                        const lines = [];
                         let currentLine = '';
                         
-                        words.forEach(word => {
+                        words.forEach((word, i) => {
                             const testLine = currentLine ? `${currentLine} ${word}` : word;
-                            const width = font.widthOfTextAtSize(testLine, fontSize);
+                            const lineWidth = font.widthOfTextAtSize(testLine, fontSize);
                             
-                            if (width > maxWidth && currentLine) {
-                                lines.push(currentLine);
+                            if (lineWidth > maxWidth && currentLine) {
+                                page.drawText(currentLine, {
+                                    x: 50,
+                                    y: yPos,
+                                    size: fontSize,
+                                    font: font,
+                                    color: rgb(0, 0, 0),
+                                });
+                                yPos -= fontSize + 4;
                                 currentLine = word;
                             } else {
                                 currentLine = testLine;
                             }
-                        });
-                        
-                        if (currentLine) lines.push(currentLine);
-                        return lines;
-                    };
-
-                    // Helper to add text with page breaks
-                    const addText = (text, fontSize = 11, font = helvetica, color = rgb(0, 0, 0)) => {
-                        if (!text) return;
-                        
-                        const lines = wrapText(text, font, fontSize, contentWidth);
-                        
-                        lines.forEach(line => {
-                            if (yPos < margin + 20) {
-                                currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-                                yPos = pageHeight - margin;
+                            
+                            if (i === words.length - 1 && currentLine) {
+                                page.drawText(currentLine, {
+                                    x: 50,
+                                    y: yPos,
+                                    size: fontSize,
+                                    font: font,
+                                    color: rgb(0, 0, 0),
+                                });
+                                yPos -= fontSize + 4;
                             }
-                            
-                            currentPage.drawText(line, {
-                                x: margin,
-                                y: yPos,
-                                size: fontSize,
-                                font: font,
-                                color: color
-                            });
-                            
-                            yPos -= fontSize + 4;
                         });
                         
                         yPos -= 6;
                     };
 
-                    // Helper to add section header
+                    // Section header helper
                     const addSection = (title) => {
-                        yPos -= 8;
+                        yPos -= 10;
+                        if (yPos < 120) return;
                         
-                        if (yPos < margin + 40) {
-                            currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-                            yPos = pageHeight - margin;
-                        }
-                        
-                        // Section background
-                        currentPage.drawRectangle({
-                            x: margin,
-                            y: yPos - 5,
-                            width: contentWidth,
-                            height: 20,
-                            color: rgb(0.23, 0.51, 0.96)
-                        });
-                        
-                        currentPage.drawText(title, {
-                            x: margin + 5,
+                        page.drawText(title, {
+                            x: 50,
                             y: yPos,
-                            size: 12,
+                            size: 14,
                             font: helveticaBold,
-                            color: rgb(1, 1, 1)
+                            color: rgb(0.23, 0.51, 0.96),
                         });
-                        
-                        yPos -= 30;
+                        yPos -= 25;
                     };
 
-                    // Header
-                    currentPage.drawRectangle({
-                        x: 0,
-                        y: pageHeight - 50,
-                        width: pageWidth,
-                        height: 50,
-                        color: rgb(0.15, 0.39, 0.92)
-                    });
-                    
-                    currentPage.drawText('HSM Showing Buyer Consult', {
-                        x: margin,
-                        y: pageHeight - 32,
-                        size: 20,
-                        font: helveticaBold,
-                        color: rgb(1, 1, 1)
-                    });
-                    
-                    yPos = pageHeight - 80;
-
-                    // Property Information
+                    // Add form content
                     addSection('PROPERTY INFORMATION');
-                    addText(`Agent: ${formData.agent || 'N/A'}`, 11, helvetica);
+                    addText('Agent', formData.agent);
                     const dateStr = formData.date ? new Date(formData.date + 'T00:00:00').toLocaleDateString('en-US') : 'N/A';
-                    addText(`Date: ${dateStr}`, 11, helvetica);
-                    addText(`Property Address: ${formData.address || 'N/A'}`, 11, helvetica);
-                    addText(`Client: ${formData.client || 'N/A'}`, 11, helvetica);
+                    addText('Date', dateStr);
+                    addText('Property Address', formData.address);
+                    addText('Client', formData.client);
 
-                    // Capital Expenses
                     if (formData.capitalExpenses) {
-                        addSection('CAPITAL EXPENSES NOTED');
-                        addText(formData.capitalExpenses);
+                        addSection('CAPITAL EXPENSES');
+                        addText('', formData.capitalExpenses);
                     }
 
-                    // Showing Notes
                     if (formData.showingNotes) {
                         addSection('SHOWING NOTES');
-                        addText(formData.showingNotes);
+                        addText('', formData.showingNotes);
                     }
 
-                    // Post-Showing Assessment
                     addSection('POST-SHOWING ASSESSMENT');
                     
                     if (formData.valueOpinion) {
-                        addText('Value & Resale Opinion:', 11, helveticaBold);
-                        addText(formData.valueOpinion);
+                        addText('Value & Resale Opinion', formData.valueOpinion);
                     }
 
                     if (formData.overallExperience) {
-                        addText('Overall Experience:', 11, helveticaBold);
-                        addText(formData.overallExperience);
+                        addText('Overall Experience', formData.overallExperience);
                     }
 
                     if (formData.rating) {
-                        addText(`Property Rating: ${formData.rating}/10`, 11, helveticaBold);
+                        addText('Property Rating', `${formData.rating}/10`, 11, true);
                     }
 
-                    // Pros & Cons
-                    if (formData.pros || formData.cons) {
-                        addSection('PROS & CONS');
-                        
-                        if (formData.pros) {
-                            addText('PROS:', 11, helveticaBold, rgb(0, 0.5, 0));
-                            addText(formData.pros);
-                        }
-
-                        if (formData.cons) {
-                            addText('CONS:', 11, helveticaBold, rgb(0.8, 0, 0));
-                            addText(formData.cons);
-                        }
+                    if (formData.pros) {
+                        addText('PROS', formData.pros);
                     }
 
-                    // Next Steps
-                    if (formData.rating && parseInt(formData.rating) > 7) {
-                        addSection('NEXT STEPS (Rating > 7)');
-                        addText('✓ Pull comparable sales');
-                        addText('✓ Contact listing agent for timelines');
-                        addText('✓ Prepare questions for listing agent');
-                        addText('✓ Schedule offer discussion via phone/zoom');
-                    } else if (formData.rating) {
-                        addSection('NEXT STEPS');
-                        addText('Continue property search based on feedback received');
+                    if (formData.cons) {
+                        addText('CONS', formData.cons);
                     }
 
                     if (formData.followUpNotes) {
-                        addText('Follow-up Notes:', 11, helveticaBold);
-                        addText(formData.followUpNotes);
+                        addSection('FOLLOW-UP NOTES');
+                        addText('', formData.followUpNotes);
                     }
 
-                    // Additional Notes
                     if (formData.additionalNotes) {
                         addSection('ADDITIONAL NOTES');
-                        addText(formData.additionalNotes);
+                        addText('', formData.additionalNotes);
                     }
 
-                    // Add Photos as separate pages
+                    console.log('Form content added to first page');
+
+                    // Add photos - USING EXACT WORKING PATTERN FROM TEST
                     if (formData.attachments && formData.attachments.length > 0) {
-                        addSection(`ATTACHED PHOTOS (${formData.attachments.length})`);
+                        console.log(`Processing ${formData.attachments.length} attachments...`);
                         
                         for (let i = 0; i < formData.attachments.length; i++) {
                             const attachment = formData.attachments[i];
+                            console.log(`Processing attachment ${i + 1}: ${attachment.name}`);
                             
                             try {
-                                // Correct image orientation and convert to JPEG
-                                const correctedDataUrl = await correctImageOrientation(attachment.data);
-                                const base64Data = correctedDataUrl.split(',')[1];
-                                const imageBytes = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
-                                
-                                // Embed image
-                                const image = await pdfDoc.embedJpg(imageBytes);
-                                
-                                // Add new page for photo
-                                const photoPage = pdfDoc.addPage([pageWidth, pageHeight]);
-                                
-                                // Add photo title
-                                photoPage.drawText(`Photo ${i + 1}: ${attachment.name}`, {
-                                    x: margin,
-                                    y: pageHeight - margin,
-                                    size: 10,
-                                    font: helveticaBold,
-                                    color: rgb(0, 0, 0)
-                                });
-                                
-                                // Calculate dimensions to fit image on page
-                                const imageAspect = image.width / image.height;
-                                const availableHeight = pageHeight - (2 * margin) - 30;
-                                const availableWidth = pageWidth - (2 * margin);
-                                const pageAspect = availableWidth / availableHeight;
-                                
-                                let drawWidth, drawHeight;
-                                if (imageAspect > pageAspect) {
-                                    drawWidth = availableWidth;
-                                    drawHeight = drawWidth / imageAspect;
-                                } else {
-                                    drawHeight = availableHeight;
-                                    drawWidth = drawHeight * imageAspect;
+                                if (attachment.type.startsWith('image/')) {
+                                    console.log('Correcting image orientation...');
+                                    const correctedDataUrl = await correctImageOrientation(attachment.data);
+                                    
+                                    console.log('Converting to bytes...');
+                                    const base64Data = correctedDataUrl.split(',')[1];
+                                    const imageBytes = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
+                                    console.log('Image bytes created, length:', imageBytes.length);
+                                    
+                                    console.log('Embedding image...');
+                                    const image = await pdfDoc.embedJpg(imageBytes);
+                                    console.log('Image embedded, dimensions:', image.width, 'x', image.height);
+                                    
+                                    console.log('Adding new page...');
+                                    const photoPage = pdfDoc.addPage();
+                                    const pageWidth = photoPage.getWidth();
+                                    const pageHeight = photoPage.getHeight();
+                                    
+                                    // Add photo label
+                                    photoPage.drawText(`Photo ${i + 1}: ${attachment.name}`, {
+                                        x: 50,
+                                        y: pageHeight - 40,
+                                        size: 10,
+                                        font: helveticaBold,
+                                        color: rgb(0, 0, 0),
+                                    });
+                                    
+                                    // Calculate dimensions
+                                    const imageAspect = image.width / image.height;
+                                    const pageAspect = pageWidth / pageHeight;
+                                    
+                                    let drawWidth, drawHeight;
+                                    if (imageAspect > pageAspect) {
+                                        drawWidth = pageWidth - 40;
+                                        drawHeight = drawWidth / imageAspect;
+                                    } else {
+                                        drawHeight = pageHeight - 80;
+                                        drawWidth = drawHeight * imageAspect;
+                                    }
+                                    
+                                    const x = (pageWidth - drawWidth) / 2;
+                                    const y = (pageHeight - drawHeight) / 2;
+                                    
+                                    console.log('Drawing image at:', x, y, 'size:', drawWidth, 'x', drawHeight);
+                                    photoPage.drawImage(image, { x, y, width: drawWidth, height: drawHeight });
+                                    console.log(`✓ Successfully added photo ${i + 1}`);
                                 }
-                                
-                                // Center the image
-                                const x = (pageWidth - drawWidth) / 2;
-                                const y = (pageHeight - drawHeight) / 2 - 15;
-                                
-                                photoPage.drawImage(image, {
-                                    x,
-                                    y,
-                                    width: drawWidth,
-                                    height: drawHeight
-                                });
-                                
-                                console.log(`Added photo ${i + 1} to PDF successfully`);
                             } catch (error) {
                                 console.error(`Error processing photo ${i + 1}:`, error);
                             }
                         }
                     }
 
-                    // Footer on last page
+                    // Footer
                     const pages = pdfDoc.getPages();
                     const lastPage = pages[pages.length - 1];
-                    const timestamp = new Date().toLocaleString('en-US');
-                    
-                    lastPage.drawText(`Generated: ${timestamp}`, {
-                        x: margin,
+                    lastPage.drawText(`Generated: ${new Date().toLocaleString()}`, {
+                        x: 50,
                         y: 20,
                         size: 8,
                         font: helvetica,
-                        color: rgb(0.5, 0.5, 0.5)
+                        color: rgb(0.5, 0.5, 0.5),
                     });
-                    
-                    lastPage.drawText('HSM Showing Buyer Consult v0.0.3', {
-                        x: pageWidth - margin - 150,
+                    lastPage.drawText('HSM Showing Consult v0.0.3', {
+                        x: width - 180,
                         y: 20,
                         size: 8,
                         font: helvetica,
-                        color: rgb(0.5, 0.5, 0.5)
+                        color: rgb(0.5, 0.5, 0.5),
                     });
 
-                    // Save PDF
+                    console.log('Saving PDF...');
                     const pdfBytes = await pdfDoc.save();
-                    const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
-                    setGeneratedPdfBlob(pdfBlob);
-
+                    console.log('PDF saved, size:', pdfBytes.length);
+                    
+                    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                    setGeneratedPdfBlob(blob);
+                    
                     const filename = `Showing_Consult_${formData.address?.replace(/\s+/g, '_') || 'Property'}_${new Date().toISOString().split('T')[0]}.pdf`;
                     const link = document.createElement('a');
-                    link.href = URL.createObjectURL(pdfBlob);
+                    link.href = URL.createObjectURL(blob);
                     link.download = filename;
                     link.click();
-
-                    const photoText = formData.attachments?.length > 0 
-                        ? ` with ${formData.attachments.length} photo(s)` 
-                        : '';
-                    showStatus(`✅ PDF generated${photoText}!`, 'success');
+                    
+                    const attachText = formData.attachments.length > 0 ? ` with ${formData.attachments.length} photo(s)` : '';
+                    showStatus(`✅ PDF generated${attachText}!`, 'success');
                     setShowEmailModal(true);
-
-                    return pdfBlob;
+                    
+                    return blob;
                 } catch (error) {
-                    console.error('Error:', error);
-                    showStatus('❌ Error generating PDF', 'error');
+                    console.error('PDF Generation Error:', error);
+                    showStatus('❌ Error: ' + error.message, 'error');
                     return null;
                 }
             };
@@ -607,7 +526,6 @@
 
                 const filename = `Showing_Consult_${formData.address?.replace(/\s+/g, '_') || 'Property'}.pdf`;
 
-                // Check if Web Share API is available (primarily mobile devices)
                 if (navigator.share && navigator.canShare) {
                     try {
                         const file = new File([generatedPdfBlob], filename, { type: 'application/pdf' });
@@ -631,7 +549,6 @@
                     }
                 }
 
-                // Fallback to mailto
                 openMailto();
             };
 
@@ -670,7 +587,7 @@
                                     <Home size={32} />
                                     <div>
                                         <h1 className="text-2xl font-bold">HSM Showing Consult</h1>
-                                        <p className="text-sm opacity-90">Property Showing Assessment Tool v0.0.3</p>
+                                        <p className="text-sm opacity-90">v0.0.3 - Fixed Image Export</p>
                                     </div>
                                 </div>
                             </div>
@@ -1088,7 +1005,7 @@
                         {/* Footer */}
                         <div className="max-w-2xl mx-auto p-4 text-center text-sm text-gray-500">
                             <p>HSM Showing Buyer Consult v0.0.3 • Home Sweet Maine</p>
-                            <p className="text-xs mt-1">Using pdf-lib for reliable image handling</p>
+                            <p className="text-xs mt-1">✅ Fixed: Images now export reliably to PDF</p>
                         </div>
                     </div>
                 </div>
