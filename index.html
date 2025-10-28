@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>HSM Showing Buyer Consult</title>
+    <title>HSM Showing Buyer Consult v0.0.2</title>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -177,25 +177,7 @@
                 );
             }
 
-            useEffect(() => {
-                const saved = localStorage.getItem('hsm_showing_consult');
-                if (saved) {
-                    try {
-                        const data = JSON.parse(saved);
-                        // Ensure attachments array exists
-                        if (!data.attachments) {
-                            data.attachments = [];
-                        }
-                        setFormData(data);
-                    } catch (e) {
-                        console.error('Error loading saved data');
-                    }
-                }
-            }, []);
-
-            useEffect(() => {
-                localStorage.setItem('hsm_showing_consult', JSON.stringify(formData));
-            }, [formData]);
+            // No auto-save - users manually save/load as needed
 
             const showStatus = (text, type) => {
                 setStatusMessage({ text, type });
@@ -234,7 +216,10 @@
                     reader.onload = (e) => {
                         try {
                             const data = JSON.parse(e.target.result);
-                            if (!data.attachments) data.attachments = [];
+                            // Ensure attachments array exists
+                            if (!data.attachments) {
+                                data.attachments = [];
+                            }
                             setFormData(data);
                             showStatus('✅ Progress loaded!', 'success');
                         } catch (error) {
@@ -247,65 +232,46 @@
             };
 
             const handlePhotoUpload = (event) => {
-                try {
-                    const files = Array.from(event.target.files);
-                    console.log('Files selected:', files.length);
-                    
-                    if (files.length === 0) return;
-                    
-                    let processed = 0;
-                    let hasError = false;
-                    
-                    files.forEach(file => {
-                        console.log('Processing file:', file.name, file.type);
-                        
-                        if (!file.type.startsWith('image/')) {
-                            showStatus('❌ Please select only image files', 'error');
-                            hasError = true;
-                            return;
-                        }
-
-                        const reader = new FileReader();
-                        
-                        reader.onload = (e) => {
-                            try {
-                                console.log('File loaded successfully:', file.name);
-                                setFormData(prev => {
-                                    const newAttachments = [...(prev.attachments || []), {
-                                        name: file.name,
-                                        data: e.target.result,
-                                        type: file.type,
-                                        size: file.size
-                                    }];
-                                    console.log('New attachments count:', newAttachments.length);
-                                    return {
-                                        ...prev,
-                                        attachments: newAttachments
-                                    };
-                                });
-                                processed++;
-                                if (processed === files.length && !hasError) {
-                                    showStatus(`📸 Added ${files.length} photo(s)`, 'success');
-                                }
-                            } catch (err) {
-                                console.error('Error in reader.onload:', err);
-                                showStatus('❌ Error processing file', 'error');
-                            }
-                        };
-                        
-                        reader.onerror = (err) => {
-                            console.error('FileReader error:', err);
-                            showStatus('❌ Error reading file', 'error');
-                        };
-                        
-                        reader.readAsDataURL(file);
-                    });
-                    
+                const files = Array.from(event.target.files);
+                let processed = 0;
+                
+                if (files.length === 0) return;
+                
+                const currentPhotoCount = (formData.attachments || []).length;
+                const maxPhotos = 20;
+                
+                if (currentPhotoCount >= maxPhotos) {
+                    showStatus(`❌ Maximum ${maxPhotos} photos allowed`, 'error');
                     event.target.value = '';
-                } catch (err) {
-                    console.error('Error in handlePhotoUpload:', err);
-                    showStatus('❌ Error uploading photos', 'error');
+                    return;
                 }
+                
+                files.forEach(file => {
+                    if (!file.type.startsWith('image/')) {
+                        showStatus('❌ Please select only image files', 'error');
+                        return;
+                    }
+                    
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        setFormData(prev => ({
+                            ...prev,
+                            attachments: [...(prev.attachments || []), {
+                                name: file.name,
+                                data: e.target.result,
+                                type: file.type,
+                                size: file.size
+                            }]
+                        }));
+                        processed++;
+                        if (processed === files.length) {
+                            showStatus(`📸 Added ${files.length} photo(s)`, 'success');
+                        }
+                    };
+                    reader.readAsDataURL(file);
+                });
+                
+                event.target.value = '';
             };
 
             const removePhoto = (index) => {
@@ -457,32 +423,37 @@
                         for (let i = 0; i < formData.attachments.length; i++) {
                             const attachment = formData.attachments[i];
                             
+                            // Add a new page for each photo
+                            doc.addPage();
+                            yPos = margin;
+                            
+                            // Add photo title
+                            doc.setFontSize(10);
+                            doc.setFont('helvetica', 'bold');
+                            doc.setTextColor(0, 0, 0);
+                            doc.text(`Photo ${i + 1}: ${attachment.name}`, margin, yPos);
+                            yPos += 10;
+                            
                             try {
-                                // Add a new page for each photo
-                                doc.addPage();
-                                yPos = margin;
-                                
-                                // Add photo title
-                                doc.setFontSize(10);
-                                doc.setFont('helvetica', 'bold');
-                                doc.setTextColor(0, 0, 0);
-                                doc.text(`Photo ${i + 1}: ${attachment.name}`, margin, yPos);
-                                yPos += 10;
-                                
-                                // Load and add image
-                                await new Promise((resolve, reject) => {
-                                    const img = new window.Image();
+                                // Load and add image with proper error handling
+                                const success = await new Promise((resolve) => {
+                                    const img = new Image();
+                                    let loaded = false;
                                     
                                     img.onload = () => {
+                                        if (loaded) return;
+                                        loaded = true;
+                                        
                                         try {
                                             // Calculate dimensions to fit on page
                                             const maxWidth = pageWidth - (2 * margin);
-                                            const maxHeight = pageHeight - margin - yPos - 20;
+                                            const maxHeight = pageHeight - yPos - 20;
                                             
                                             let imgWidth = img.width;
                                             let imgHeight = img.height;
                                             const aspectRatio = imgWidth / imgHeight;
                                             
+                                            // Scale down if needed
                                             if (imgWidth > maxWidth) {
                                                 imgWidth = maxWidth;
                                                 imgHeight = imgWidth / aspectRatio;
@@ -496,39 +467,60 @@
                                             // Center the image
                                             const x = (pageWidth - imgWidth) / 2;
                                             
-                                            // Add image to PDF
-                                            const format = attachment.type.includes('png') ? 'PNG' : 'JPEG';
-                                            doc.addImage(attachment.data, format, x, yPos, imgWidth, imgHeight);
+                                            // Determine format - jsPDF supports JPEG, PNG, GIF, WebP
+                                            let format = 'JPEG';
+                                            if (attachment.type === 'image/png') {
+                                                format = 'PNG';
+                                            } else if (attachment.type === 'image/gif') {
+                                                format = 'GIF';
+                                            } else if (attachment.type === 'image/webp') {
+                                                format = 'WEBP';
+                                            } else if (attachment.type === 'image/jpeg' || attachment.type === 'image/jpg') {
+                                                format = 'JPEG';
+                                            }
                                             
-                                            resolve();
+                                            // Add image to PDF
+                                            doc.addImage(attachment.data, format, x, yPos, imgWidth, imgHeight);
+                                            console.log(`Added photo ${i + 1} to PDF successfully`);
+                                            resolve(true);
                                         } catch (err) {
-                                            console.error('Error processing image:', err);
-                                            reject(err);
+                                            console.error('Error adding image to PDF:', err);
+                                            resolve(false);
                                         }
                                     };
                                     
                                     img.onerror = (err) => {
+                                        if (loaded) return;
+                                        loaded = true;
                                         console.error('Error loading image:', err);
-                                        reject(err);
+                                        resolve(false);
                                     };
                                     
-                                    img.src = attachment.data;
+                                    // Set timeout to prevent hanging
+                                    setTimeout(() => {
+                                        if (!loaded) {
+                                            loaded = true;
+                                            console.error('Image load timeout');
+                                            resolve(false);
+                                        }
+                                    }, 10000);
                                     
-                                    // Timeout after 5 seconds
-                                    setTimeout(() => reject(new Error('Image load timeout')), 5000);
+                                    img.src = attachment.data;
                                 });
+                                
+                                if (!success) {
+                                    // If image failed, add error message
+                                    doc.setFontSize(10);
+                                    doc.setTextColor(200, 0, 0);
+                                    doc.text(`Unable to load photo: ${attachment.name}`, margin, yPos);
+                                    doc.text(`(The photo may be corrupted or in an unsupported format)`, margin, yPos + 7);
+                                }
                             } catch (error) {
-                                console.error('Error adding photo to PDF:', error);
+                                console.error('Error processing photo for PDF:', error);
                                 doc.setFontSize(10);
-                                doc.setTextColor(255, 0, 0);
-                                doc.text(`(Unable to load photo: ${attachment.name})`, margin, yPos);
+                                doc.setTextColor(200, 0, 0);
+                                doc.text(`Error loading photo: ${attachment.name}`, margin, yPos);
                             }
-                        }
-                        
-                        // Add a new page for footer if we added photos
-                        if (formData.attachments.length > 0) {
-                            doc.addPage();
-                            yPos = margin;
                         }
                     }
 
@@ -1103,7 +1095,7 @@
 
                     {/* Footer */}
                     <div className="max-w-2xl mx-auto p-4 text-center text-sm text-gray-500">
-                        <p>HSM Showing Buyer Consult • Home Sweet Maine</p>
+                        <p>HSM Showing Buyer Consult v0.0.2 • Home Sweet Maine</p>
                     </div>
                 </div>
             );
