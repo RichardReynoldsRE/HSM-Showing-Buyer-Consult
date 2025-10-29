@@ -124,6 +124,13 @@
             </svg>
         );
 
+        const Mail = ({ size = 20 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                <polyline points="22,6 12,13 2,6"></polyline>
+            </svg>
+        );
+
         function App() {
             const [formData, setFormData] = useState({
                 agent: '',
@@ -143,12 +150,6 @@
             });
 
             const [generatedPdfBlob, setGeneratedPdfBlob] = useState(null);
-            const [showEmailModal, setShowEmailModal] = useState(false);
-            const [emailRecipients, setEmailRecipients] = useState({
-                agent: '',
-                client: '',
-                broker: ''
-            });
             const [statusMessage, setStatusMessage] = useState({ text: '', type: '' });
             const [error, setError] = useState(null);
             const [renamingPhotoIndex, setRenamingPhotoIndex] = useState(null);
@@ -214,7 +215,7 @@
                 document.body.removeChild(link);
                 URL.revokeObjectURL(url);
                 
-                showStatus('✅ Progress saved!', 'success');
+                showStatus('Progress saved!', 'success');
             };
 
             const handleLoad = (event) => {
@@ -229,9 +230,9 @@
                                 data.attachments = [];
                             }
                             setFormData(data);
-                            showStatus('✅ Progress loaded!', 'success');
+                            showStatus('Progress loaded!', 'success');
                         } catch (error) {
-                            showStatus('❌ Error loading file', 'error');
+                            showStatus('Error loading file', 'error');
                         }
                     };
                     reader.readAsText(file);
@@ -249,14 +250,14 @@
                 const maxPhotos = 20;
                 
                 if (currentPhotoCount >= maxPhotos) {
-                    showStatus(`❌ Maximum ${maxPhotos} photos allowed`, 'error');
+                    showStatus(`Maximum ${maxPhotos} photos allowed`, 'error');
                     event.target.value = '';
                     return;
                 }
                 
                 files.forEach(file => {
                     if (!file.type.startsWith('image/')) {
-                        showStatus('❌ Please select only image files', 'error');
+                        showStatus('Please select only image files', 'error');
                         return;
                     }
                     
@@ -273,7 +274,7 @@
                         }));
                         processed++;
                         if (processed === files.length) {
-                            showStatus(`📸 Added ${files.length} photo(s)`, 'success');
+                            showStatus(`Added ${files.length} photo(s)`, 'success');
                         }
                     };
                     reader.readAsDataURL(file);
@@ -287,7 +288,7 @@
                     ...prev,
                     attachments: (prev.attachments || []).filter((_, i) => i !== index)
                 }));
-                showStatus('🗑️ Photo removed', 'success');
+                showStatus('Photo removed', 'success');
             };
 
             const renamePhoto = (index, newName) => {
@@ -324,7 +325,7 @@
 
             const generatePDF = async () => {
                 try {
-                    showStatus('📄 Generating PDF...', 'success');
+                    showStatus('Generating PDF...', 'success');
 
                     const { PDFDocument, rgb, StandardFonts } = PDFLib;
                     const pdfDoc = await PDFDocument.create();
@@ -587,7 +588,7 @@
                         color: rgb(0.5, 0.5, 0.5)
                     });
                     
-                    lastPage.drawText('HSM Showing Buyer Consult v0.0.4', {
+                    lastPage.drawText('HSM Showing Buyer Consult v0.0.5', {
                         x: pageWidth - margin - 150,
                         y: 20,
                         size: 8,
@@ -609,26 +610,25 @@
                     const photoText = formData.attachments?.length > 0 
                         ? ` with ${formData.attachments.length} photo(s)` 
                         : '';
-                    showStatus(`✅ PDF generated${photoText}!`, 'success');
-                    setShowEmailModal(true);
+                    showStatus(`PDF generated${photoText}!`, 'success');
 
                     return pdfBlob;
                 } catch (error) {
                     console.error('Error:', error);
-                    showStatus('❌ Error generating PDF', 'error');
+                    showStatus('Error generating PDF', 'error');
                     return null;
                 }
             };
 
-            const handleEmailPDF = async () => {
+            const handleShare = async () => {
                 if (!generatedPdfBlob) {
-                    showStatus('❌ No PDF generated yet', 'error');
+                    showStatus('No PDF generated yet', 'error');
                     return;
                 }
 
                 const filename = `Showing_Consult_${formData.address?.replace(/\s+/g, '_') || 'Property'}.pdf`;
 
-                // Check if Web Share API is available (primarily mobile devices)
+                // Try Web Share API first (mobile and some desktop browsers)
                 if (navigator.share && navigator.canShare) {
                     try {
                         const file = new File([generatedPdfBlob], filename, { type: 'application/pdf' });
@@ -636,49 +636,87 @@
                         if (navigator.canShare({ files: [file] })) {
                             await navigator.share({
                                 files: [file],
-                                title: 'Showing Buyer Consult',
+                                title: 'Property Showing Consult',
                                 text: `Showing Consult for ${formData.address || 'property'}`
                             });
-                            showStatus('✅ Share completed!', 'success');
-                            setShowEmailModal(false);
+                            showStatus('Share completed!', 'success');
                             return;
                         }
                     } catch (error) {
                         if (error.name !== 'AbortError') {
                             console.error('Share error:', error);
                         } else {
-                            return;
+                            return; // User cancelled
                         }
                     }
                 }
 
-                // Fallback to mailto
-                openMailto();
+                // Fallback: Download the PDF
+                const url = URL.createObjectURL(generatedPdfBlob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = filename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+                showStatus('PDF downloaded - you can now share it', 'success');
             };
 
-            const openMailto = () => {
-                const recipients = [
-                    emailRecipients.agent,
-                    emailRecipients.client,
-                    emailRecipients.broker
-                ].filter(email => email).join(',');
+            const handleEmail = async () => {
+                if (!generatedPdfBlob) {
+                    showStatus('No PDF generated yet', 'error');
+                    return;
+                }
 
+                const filename = `Showing_Consult_${formData.address?.replace(/\s+/g, '_') || 'Property'}.pdf`;
+
+                // Try Web Share API first with email-specific messaging
+                if (navigator.share && navigator.canShare) {
+                    try {
+                        const file = new File([generatedPdfBlob], filename, { type: 'application/pdf' });
+                        
+                        if (navigator.canShare({ files: [file] })) {
+                            await navigator.share({
+                                files: [file],
+                                title: `Showing Consult - ${formData.address || 'Property'}`,
+                                text: `Property: ${formData.address || 'N/A'}\nAgent: ${formData.agent || 'N/A'}\nRating: ${formData.rating ? formData.rating + '/10' : 'N/A'}`
+                            });
+                            showStatus('Share completed!', 'success');
+                            return;
+                        }
+                    } catch (error) {
+                        if (error.name !== 'AbortError') {
+                            console.error('Share error:', error);
+                        } else {
+                            return; // User cancelled
+                        }
+                    }
+                }
+
+                // Fallback: Download PDF and open mailto
+                const url = URL.createObjectURL(generatedPdfBlob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = filename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+
+                // Open mailto with pre-filled subject and body
                 const subject = encodeURIComponent(`Showing Consult - ${formData.address || 'Property'}`);
                 const body = encodeURIComponent(
-                    `Please find attached the Showing Buyer Consult.\n\n` +
+                    `Please find attached the Showing Buyer Consult report.\n\n` +
                     `Property: ${formData.address || 'N/A'}\n` +
                     `Agent: ${formData.agent || 'N/A'}\n` +
                     `Date: ${formData.date || 'N/A'}\n` +
                     `Rating: ${formData.rating ? formData.rating + '/10' : 'N/A'}\n\n` +
-                    `Note: The PDF file has been downloaded to your device. Please attach it to this email.`
+                    `The PDF has been downloaded to your device. Please attach "${filename}" to this email.`
                 );
 
-                window.location.href = recipients 
-                    ? `mailto:${recipients}?subject=${subject}&body=${body}`
-                    : `mailto:?subject=${subject}&body=${body}`;
-
-                showStatus('📧 Email client opened', 'success');
-                setShowEmailModal(false);
+                window.location.href = `mailto:?subject=${subject}&body=${body}`;
+                showStatus('Email client opened - PDF downloaded', 'success');
             };
 
             return (
@@ -691,24 +729,24 @@
                                     <Home size={32} />
                                     <div>
                                         <h1 className="text-2xl font-bold">HSM Showing Consult</h1>
-                                        <p className="text-sm opacity-90">Property Showing Assessment Tool v0.0.4</p>
+                                        <p className="text-sm opacity-90">Property Showing Assessment Tool v0.0.5</p>
                                     </div>
                                 </div>
                             </div>
 
                             {/* Action Buttons */}
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                                 <button
                                     onClick={handleSave}
                                     className="action-button bg-white text-blue-600 px-4 py-3 rounded-lg font-semibold flex items-center justify-center gap-2 hover:bg-blue-50 transition-colors shadow-md"
                                 >
                                     <Save size={20} />
-                                    <span>Save Progress</span>
+                                    <span>Save</span>
                                 </button>
 
                                 <label className="action-button bg-white text-blue-600 px-4 py-3 rounded-lg font-semibold flex items-center justify-center gap-2 hover:bg-blue-50 transition-colors cursor-pointer shadow-md">
                                     <Upload size={20} />
-                                    <span>Load Progress</span>
+                                    <span>Load</span>
                                     <input
                                         type="file"
                                         accept=".json"
@@ -723,6 +761,26 @@
                                 >
                                     <FileText size={20} />
                                     <span>Generate PDF</span>
+                                </button>
+
+                                <button
+                                    onClick={handleEmail}
+                                    disabled={!generatedPdfBlob}
+                                    className="action-button bg-blue-600 text-white px-4 py-3 rounded-lg font-semibold flex items-center justify-center gap-2 hover:bg-blue-700 transition-colors shadow-md disabled:bg-gray-300 disabled:cursor-not-allowed"
+                                    title={!generatedPdfBlob ? "Generate PDF first" : "Open email with PDF"}
+                                >
+                                    <Mail size={20} />
+                                    <span>Email</span>
+                                </button>
+
+                                <button
+                                    onClick={handleShare}
+                                    disabled={!generatedPdfBlob}
+                                    className="action-button bg-green-600 text-white px-4 py-3 rounded-lg font-semibold flex items-center justify-center gap-2 hover:bg-green-700 transition-colors shadow-md disabled:bg-gray-300 disabled:cursor-not-allowed"
+                                    title={!generatedPdfBlob ? "Generate PDF first" : "Share PDF"}
+                                >
+                                    <Share size={20} />
+                                    <span>Share</span>
                                 </button>
                             </div>
                         </div>
@@ -1064,80 +1122,9 @@
                             </div>
                         </div>
 
-                        {/* Email Modal */}
-                        {showEmailModal && (
-                            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-                                <div className="bg-white rounded-lg max-w-md w-full p-6 space-y-4">
-                                    <h3 className="text-xl font-bold text-gray-900">Share Report</h3>
-                                    
-                                    <p className="text-sm text-gray-600">
-                                        Add email addresses (optional) or share directly via your device.
-                                    </p>
-
-                                    <div className="space-y-3">
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                                                Your Email (Agent)
-                                            </label>
-                                            <input
-                                                type="email"
-                                                value={emailRecipients.agent}
-                                                onChange={(e) => setEmailRecipients(prev => ({...prev, agent: e.target.value}))}
-                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                                                placeholder="agent@example.com"
-                                            />
-                                        </div>
-
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                                                Client Email
-                                            </label>
-                                            <input
-                                                type="email"
-                                                value={emailRecipients.client}
-                                                onChange={(e) => setEmailRecipients(prev => ({...prev, client: e.target.value}))}
-                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                                                placeholder="client@example.com"
-                                            />
-                                        </div>
-
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                                                Broker Email
-                                            </label>
-                                            <input
-                                                type="email"
-                                                value={emailRecipients.broker}
-                                                onChange={(e) => setEmailRecipients(prev => ({...prev, broker: e.target.value}))}
-                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                                                placeholder="broker@example.com"
-                                            />
-                                        </div>
-                                    </div>
-
-                                    <div className="flex gap-2">
-                                        <button
-                                            onClick={handleEmailPDF}
-                                            className="flex-1 flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition-colors"
-                                        >
-                                            <Share size={20} />
-                                            <span>Share / Email</span>
-                                        </button>
-
-                                        <button
-                                            onClick={() => setShowEmailModal(false)}
-                                            className="px-4 py-3 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-                                        >
-                                            Close
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
                         {/* Footer */}
                         <div className="max-w-2xl mx-auto p-4 text-center text-sm text-gray-500">
-                            <p>HSM Showing Buyer Consult v0.0.4 • Home Sweet Maine</p>
+                            <p>HSM Showing Buyer Consult v0.0.5 • Home Sweet Maine</p>
                             <p className="text-xs mt-1">Using pdf-lib for reliable image handling</p>
                         </div>
                     </div>
