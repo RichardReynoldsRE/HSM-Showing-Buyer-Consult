@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>HSM Showing Buyer Consult v0.0.3 DEBUG</title>
+    <title>HSM Showing Buyer Consult</title>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -68,6 +68,13 @@
             <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
                 <polyline points="14 2 14 8 20 8"></polyline>
+            </svg>
+        );
+
+        const Mail = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                <polyline points="22,6 12,13 2,6"></polyline>
             </svg>
         );
 
@@ -136,6 +143,41 @@
                 broker: ''
             });
             const [statusMessage, setStatusMessage] = useState({ text: '', type: '' });
+            const [error, setError] = useState(null);
+
+            // Error boundary effect
+            useEffect(() => {
+                const handleError = (event) => {
+                    console.error('Global error:', event.error);
+                    setError(event.error?.message || 'An unexpected error occurred');
+                    event.preventDefault();
+                };
+                
+                window.addEventListener('error', handleError);
+                return () => window.removeEventListener('error', handleError);
+            }, []);
+
+            if (error) {
+                return (
+                    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-lg shadow-lg p-6 max-w-md">
+                            <h2 className="text-xl font-bold text-red-600 mb-4">Something went wrong</h2>
+                            <p className="text-gray-700 mb-4">{error}</p>
+                            <button
+                                onClick={() => {
+                                    setError(null);
+                                    window.location.reload();
+                                }}
+                                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+                            >
+                                Reload Page
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
+            // No auto-save - users manually save/load as needed
 
             const showStatus = (text, type) => {
                 setStatusMessage({ text, type });
@@ -174,6 +216,7 @@
                     reader.onload = (e) => {
                         try {
                             const data = JSON.parse(e.target.result);
+                            // Ensure attachments array exists
                             if (!data.attachments) {
                                 data.attachments = [];
                             }
@@ -239,18 +282,21 @@
                 showStatus('🗑️ Photo removed', 'success');
             };
 
+            // Helper function to correct image orientation and convert to JPEG
             const correctImageOrientation = async (dataUrl) => {
                 return new Promise((resolve) => {
                     const img = new Image();
                     img.onload = () => {
                         const canvas = document.createElement('canvas');
                         const ctx = canvas.getContext('2d');
+                        
                         canvas.width = img.width;
                         canvas.height = img.height;
                         ctx.drawImage(img, 0, 0);
+                        
                         resolve(canvas.toDataURL('image/jpeg', 0.92));
                     };
-                    img.onerror = () => resolve(dataUrl);
+                    img.onerror = () => resolve(dataUrl); // Fallback to original if error
                     img.src = dataUrl;
                 });
             };
@@ -258,159 +304,297 @@
             const generatePDF = async () => {
                 try {
                     showStatus('📄 Generating PDF...', 'success');
-                    console.log('=== REACT APP PDF GENERATION START ===');
-                    console.log('formData.attachments:', formData.attachments);
-                    console.log('Number of attachments:', formData.attachments?.length || 0);
-                    
-                    // CRITICAL: Store attachments in local variable to avoid React state issues
-                    const attachmentsToProcess = [...(formData.attachments || [])];
-                    console.log('Copied to local variable:', attachmentsToProcess.length);
 
                     const { PDFDocument, rgb, StandardFonts } = PDFLib;
                     const pdfDoc = await PDFDocument.create();
+                    
+                    // Standard page dimensions (US Letter)
+                    const pageWidth = 612;
+                    const pageHeight = 792;
+                    const margin = 50;
+                    const contentWidth = pageWidth - (2 * margin);
+                    
+                    // Load fonts
                     const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
                     const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+                    
+                    let currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
+                    let yPos = pageHeight - margin;
 
-                    // Add first page with title
-                    const page = pdfDoc.addPage([612, 792]);
-                    const { width, height } = page.getSize();
+                    // Helper to wrap text
+                    const wrapText = (text, font, fontSize, maxWidth) => {
+                        const words = text.split(' ');
+                        const lines = [];
+                        let currentLine = '';
+                        
+                        words.forEach(word => {
+                            const testLine = currentLine ? `${currentLine} ${word}` : word;
+                            const width = font.widthOfTextAtSize(testLine, fontSize);
+                            
+                            if (width > maxWidth && currentLine) {
+                                lines.push(currentLine);
+                                currentLine = word;
+                            } else {
+                                currentLine = testLine;
+                            }
+                        });
+                        
+                        if (currentLine) lines.push(currentLine);
+                        return lines;
+                    };
 
-                    page.drawRectangle({
+                    // Helper to add text with page breaks
+                    const addText = (text, fontSize = 11, font = helvetica, color = rgb(0, 0, 0)) => {
+                        if (!text) return;
+                        
+                        const lines = wrapText(text, font, fontSize, contentWidth);
+                        
+                        lines.forEach(line => {
+                            if (yPos < margin + 20) {
+                                currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
+                                yPos = pageHeight - margin;
+                            }
+                            
+                            currentPage.drawText(line, {
+                                x: margin,
+                                y: yPos,
+                                size: fontSize,
+                                font: font,
+                                color: color
+                            });
+                            
+                            yPos -= fontSize + 4;
+                        });
+                        
+                        yPos -= 6;
+                    };
+
+                    // Helper to add section header
+                    const addSection = (title) => {
+                        yPos -= 8;
+                        
+                        if (yPos < margin + 40) {
+                            currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
+                            yPos = pageHeight - margin;
+                        }
+                        
+                        // Section background
+                        currentPage.drawRectangle({
+                            x: margin,
+                            y: yPos - 5,
+                            width: contentWidth,
+                            height: 20,
+                            color: rgb(0.23, 0.51, 0.96)
+                        });
+                        
+                        currentPage.drawText(title, {
+                            x: margin + 5,
+                            y: yPos,
+                            size: 12,
+                            font: helveticaBold,
+                            color: rgb(1, 1, 1)
+                        });
+                        
+                        yPos -= 30;
+                    };
+
+                    // Header
+                    currentPage.drawRectangle({
                         x: 0,
-                        y: height - 50,
-                        width: width,
+                        y: pageHeight - 50,
+                        width: pageWidth,
                         height: 50,
-                        color: rgb(0.15, 0.39, 0.92),
+                        color: rgb(0.15, 0.39, 0.92)
                     });
-
-                    page.drawText('HSM Showing Buyer Consult', {
-                        x: 50,
-                        y: height - 32,
+                    
+                    currentPage.drawText('HSM Showing Buyer Consult', {
+                        x: margin,
+                        y: pageHeight - 32,
                         size: 20,
                         font: helveticaBold,
-                        color: rgb(1, 1, 1),
+                        color: rgb(1, 1, 1)
                     });
+                    
+                    yPos = pageHeight - 80;
 
-                    let yPos = height - 80;
+                    // Property Information
+                    addSection('PROPERTY INFORMATION');
+                    addText(`Agent: ${formData.agent || 'N/A'}`, 11, helvetica);
+                    const dateStr = formData.date ? new Date(formData.date + 'T00:00:00').toLocaleDateString('en-US') : 'N/A';
+                    addText(`Date: ${dateStr}`, 11, helvetica);
+                    addText(`Property Address: ${formData.address || 'N/A'}`, 11, helvetica);
+                    addText(`Client: ${formData.client || 'N/A'}`, 11, helvetica);
 
-                    // Add basic info
-                    page.drawText(`Agent: ${formData.agent || 'N/A'}`, {
-                        x: 50,
-                        y: yPos,
-                        size: 11,
-                        font: helvetica,
-                        color: rgb(0, 0, 0),
-                    });
-                    yPos -= 20;
-
-                    page.drawText(`Address: ${formData.address || 'N/A'}`, {
-                        x: 50,
-                        y: yPos,
-                        size: 11,
-                        font: helvetica,
-                        color: rgb(0, 0, 0),
-                    });
-                    yPos -= 20;
-
-                    if (formData.rating) {
-                        page.drawText(`Rating: ${formData.rating}/10`, {
-                            x: 50,
-                            y: yPos,
-                            size: 11,
-                            font: helveticaBold,
-                            color: rgb(0, 0, 0),
-                        });
+                    // Capital Expenses
+                    if (formData.capitalExpenses) {
+                        addSection('CAPITAL EXPENSES NOTED');
+                        addText(formData.capitalExpenses);
                     }
 
-                    console.log('First page content added');
+                    // Showing Notes
+                    if (formData.showingNotes) {
+                        addSection('SHOWING NOTES');
+                        addText(formData.showingNotes);
+                    }
 
-                    // Process photos
-                    console.log(`\n=== PROCESSING ${attachmentsToProcess.length} PHOTOS ===`);
+                    // Post-Showing Assessment
+                    addSection('POST-SHOWING ASSESSMENT');
                     
-                    for (let i = 0; i < attachmentsToProcess.length; i++) {
-                        const attachment = attachmentsToProcess[i];
-                        console.log(`\n--- Photo ${i + 1}/${attachmentsToProcess.length} ---`);
-                        console.log('Name:', attachment.name);
-                        console.log('Type:', attachment.type);
-                        console.log('Has data:', !!attachment.data);
+                    if (formData.valueOpinion) {
+                        addText('Value & Resale Opinion:', 11, helveticaBold);
+                        addText(formData.valueOpinion);
+                    }
+
+                    if (formData.overallExperience) {
+                        addText('Overall Experience:', 11, helveticaBold);
+                        addText(formData.overallExperience);
+                    }
+
+                    if (formData.rating) {
+                        addText(`Property Rating: ${formData.rating}/10`, 11, helveticaBold);
+                    }
+
+                    // Pros & Cons
+                    if (formData.pros || formData.cons) {
+                        addSection('PROS & CONS');
                         
-                        try {
-                            if (attachment.type && attachment.type.startsWith('image/')) {
-                                console.log('Step 1: Correcting orientation...');
-                                const correctedDataUrl = await correctImageOrientation(attachment.data);
-                                console.log('✓ Corrected');
-                                
-                                console.log('Step 2: Converting to bytes...');
-                                const base64Data = correctedDataUrl.split(',')[1];
-                                const imageBytes = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
-                                console.log('✓ Bytes created, length:', imageBytes.length);
-                                
-                                console.log('Step 3: Embedding image...');
-                                const image = await pdfDoc.embedJpg(imageBytes);
-                                console.log('✓ Embedded:', image.width, 'x', image.height);
-                                
-                                console.log('Step 4: Adding page...');
-                                const photoPage = pdfDoc.addPage();
-                                const pageWidth = photoPage.getWidth();
-                                const pageHeight = photoPage.getHeight();
-                                console.log('✓ Page added');
-                                
-                                photoPage.drawText(`Photo ${i + 1}: ${attachment.name}`, {
-                                    x: 50,
-                                    y: pageHeight - 40,
-                                    size: 10,
-                                    font: helveticaBold,
-                                    color: rgb(0, 0, 0),
-                                });
-                                
-                                const imageAspect = image.width / image.height;
-                                const pageAspect = pageWidth / pageHeight;
-                                
-                                let drawWidth, drawHeight;
-                                if (imageAspect > pageAspect) {
-                                    drawWidth = pageWidth - 40;
-                                    drawHeight = drawWidth / imageAspect;
-                                } else {
-                                    drawHeight = pageHeight - 80;
-                                    drawWidth = drawHeight * imageAspect;
-                                }
-                                
-                                const x = (pageWidth - drawWidth) / 2;
-                                const y = (pageHeight - drawHeight) / 2;
-                                
-                                console.log('Step 5: Drawing image...');
-                                photoPage.drawImage(image, { x, y, width: drawWidth, height: drawHeight });
-                                console.log('✓✓✓ IMAGE ADDED SUCCESSFULLY ✓✓✓');
-                            }
-                        } catch (error) {
-                            console.error(`ERROR on photo ${i + 1}:`, error);
-                            console.error('Stack:', error.stack);
+                        if (formData.pros) {
+                            addText('PROS:', 11, helveticaBold, rgb(0, 0.5, 0));
+                            addText(formData.pros);
+                        }
+
+                        if (formData.cons) {
+                            addText('CONS:', 11, helveticaBold, rgb(0.8, 0, 0));
+                            addText(formData.cons);
                         }
                     }
 
-                    console.log('\n=== SAVING PDF ===');
+                    // Next Steps
+                    if (formData.rating && parseInt(formData.rating) > 7) {
+                        addSection('NEXT STEPS (Rating > 7)');
+                        addText('✓ Pull comparable sales');
+                        addText('✓ Contact listing agent for timelines');
+                        addText('✓ Prepare questions for listing agent');
+                        addText('✓ Schedule offer discussion via phone/zoom');
+                    } else if (formData.rating) {
+                        addSection('NEXT STEPS');
+                        addText('Continue property search based on feedback received');
+                    }
+
+                    if (formData.followUpNotes) {
+                        addText('Follow-up Notes:', 11, helveticaBold);
+                        addText(formData.followUpNotes);
+                    }
+
+                    // Additional Notes
+                    if (formData.additionalNotes) {
+                        addSection('ADDITIONAL NOTES');
+                        addText(formData.additionalNotes);
+                    }
+
+                    // Add Photos as separate pages
+                    if (formData.attachments && formData.attachments.length > 0) {
+                        addSection(`ATTACHED PHOTOS (${formData.attachments.length})`);
+                        
+                        for (let i = 0; i < formData.attachments.length; i++) {
+                            const attachment = formData.attachments[i];
+                            
+                            try {
+                                // Correct image orientation and convert to JPEG
+                                const correctedDataUrl = await correctImageOrientation(attachment.data);
+                                const base64Data = correctedDataUrl.split(',')[1];
+                                const imageBytes = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
+                                
+                                // Embed image
+                                const image = await pdfDoc.embedJpg(imageBytes);
+                                
+                                // Add new page for photo
+                                const photoPage = pdfDoc.addPage([pageWidth, pageHeight]);
+                                
+                                // Add photo title
+                                photoPage.drawText(`Photo ${i + 1}: ${attachment.name}`, {
+                                    x: margin,
+                                    y: pageHeight - margin,
+                                    size: 10,
+                                    font: helveticaBold,
+                                    color: rgb(0, 0, 0)
+                                });
+                                
+                                // Calculate dimensions to fit image on page
+                                const imageAspect = image.width / image.height;
+                                const availableHeight = pageHeight - (2 * margin) - 30;
+                                const availableWidth = pageWidth - (2 * margin);
+                                const pageAspect = availableWidth / availableHeight;
+                                
+                                let drawWidth, drawHeight;
+                                if (imageAspect > pageAspect) {
+                                    drawWidth = availableWidth;
+                                    drawHeight = drawWidth / imageAspect;
+                                } else {
+                                    drawHeight = availableHeight;
+                                    drawWidth = drawHeight * imageAspect;
+                                }
+                                
+                                // Center the image
+                                const x = (pageWidth - drawWidth) / 2;
+                                const y = (pageHeight - drawHeight) / 2 - 15;
+                                
+                                photoPage.drawImage(image, {
+                                    x,
+                                    y,
+                                    width: drawWidth,
+                                    height: drawHeight
+                                });
+                                
+                                console.log(`Added photo ${i + 1} to PDF successfully`);
+                            } catch (error) {
+                                console.error(`Error processing photo ${i + 1}:`, error);
+                            }
+                        }
+                    }
+
+                    // Footer on last page
+                    const pages = pdfDoc.getPages();
+                    const lastPage = pages[pages.length - 1];
+                    const timestamp = new Date().toLocaleString('en-US');
+                    
+                    lastPage.drawText(`Generated: ${timestamp}`, {
+                        x: margin,
+                        y: 20,
+                        size: 8,
+                        font: helvetica,
+                        color: rgb(0.5, 0.5, 0.5)
+                    });
+                    
+                    lastPage.drawText('HSM Showing Buyer Consult v0.0.4', {
+                        x: pageWidth - margin - 150,
+                        y: 20,
+                        size: 8,
+                        font: helvetica,
+                        color: rgb(0.5, 0.5, 0.5)
+                    });
+
+                    // Save PDF
                     const pdfBytes = await pdfDoc.save();
-                    console.log('✓ Saved, size:', pdfBytes.length);
-                    console.log('Total pages:', pdfDoc.getPageCount());
-                    
-                    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-                    setGeneratedPdfBlob(blob);
-                    
+                    const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
+                    setGeneratedPdfBlob(pdfBlob);
+
                     const filename = `Showing_Consult_${formData.address?.replace(/\s+/g, '_') || 'Property'}_${new Date().toISOString().split('T')[0]}.pdf`;
                     const link = document.createElement('a');
-                    link.href = URL.createObjectURL(blob);
+                    link.href = URL.createObjectURL(pdfBlob);
                     link.download = filename;
                     link.click();
-                    
-                    const attachText = attachmentsToProcess.length > 0 ? ` with ${attachmentsToProcess.length} photo(s)` : '';
-                    showStatus(`✅ PDF generated${attachText}! Pages: ${pdfDoc.getPageCount()}`, 'success');
+
+                    const photoText = formData.attachments?.length > 0 
+                        ? ` with ${formData.attachments.length} photo(s)` 
+                        : '';
+                    showStatus(`✅ PDF generated${photoText}!`, 'success');
                     setShowEmailModal(true);
-                    
-                    return blob;
+
+                    return pdfBlob;
                 } catch (error) {
-                    console.error('FATAL ERROR:', error);
-                    console.error('Stack:', error.stack);
-                    showStatus('❌ Error: ' + error.message, 'error');
+                    console.error('Error:', error);
+                    showStatus('❌ Error generating PDF', 'error');
                     return null;
                 }
             };
@@ -423,6 +607,7 @@
 
                 const filename = `Showing_Consult_${formData.address?.replace(/\s+/g, '_') || 'Property'}.pdf`;
 
+                // Check if Web Share API is available (primarily mobile devices)
                 if (navigator.share && navigator.canShare) {
                     try {
                         const file = new File([generatedPdfBlob], filename, { type: 'application/pdf' });
@@ -446,6 +631,7 @@
                     }
                 }
 
+                // Fallback to mailto
                 openMailto();
             };
 
@@ -476,6 +662,7 @@
 
             return (
                 <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50">
+                    {/* Header */}
                     <div className="bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-lg">
                         <div className="max-w-2xl mx-auto p-4">
                             <div className="flex items-center justify-between mb-4">
@@ -483,11 +670,12 @@
                                     <Home size={32} />
                                     <div>
                                         <h1 className="text-2xl font-bold">HSM Showing Consult</h1>
-                                        <p className="text-sm opacity-90">v0.0.3 DEBUG - Check Console (F12)</p>
+                                        <p className="text-sm opacity-90">Property Showing Assessment Tool v0.0.4</p>
                                     </div>
                                 </div>
                             </div>
 
+                            {/* Action Buttons */}
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                 <button
                                     onClick={handleSave}
@@ -519,6 +707,7 @@
                         </div>
                     </div>
 
+                    {/* Status Message */}
                     {statusMessage.text && (
                         <div className="max-w-2xl mx-auto px-4 mt-4">
                             <div className={`p-4 rounded-lg shadow-md ${
@@ -531,114 +720,301 @@
                         </div>
                     )}
 
+                    {/* Form Content */}
                     <div className="max-w-2xl mx-auto p-4">
-                        <div className="bg-white rounded-xl shadow-lg overflow-hidden p-6 space-y-6">
+                        <div className="bg-white rounded-xl shadow-lg overflow-hidden">
                             
-                            <div className="space-y-4">
-                                <h2 className="text-xl font-bold text-gray-800 border-b-2 border-blue-600 pb-2">
-                                    Quick Test Form
-                                </h2>
+                            <div className="p-6 space-y-6">
+                                {/* Basic Info */}
+                                <div className="space-y-4">
+                                    <h2 className="text-xl font-bold text-gray-800 border-b-2 border-blue-600 pb-2">
+                                        Basic Information
+                                    </h2>
 
-                                <input
-                                    type="text"
-                                    value={formData.agent}
-                                    onChange={(e) => handleInputChange('agent', e.target.value)}
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                                    placeholder="Agent Name"
-                                />
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Agent Name
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={formData.agent}
+                                                onChange={(e) => handleInputChange('agent', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                                placeholder="Your name"
+                                            />
+                                        </div>
 
-                                <input
-                                    type="text"
-                                    value={formData.address}
-                                    onChange={(e) => handleInputChange('address', e.target.value)}
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                                    placeholder="Property Address"
-                                />
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Date
+                                            </label>
+                                            <input
+                                                type="date"
+                                                value={formData.date}
+                                                onChange={(e) => handleInputChange('date', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            />
+                                        </div>
+                                    </div>
 
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-3">
-                                        Property Rating (1-10)
-                                    </label>
-                                    <div className="grid grid-cols-5 sm:grid-cols-10 gap-2">
-                                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((num) => (
-                                            <button
-                                                key={num}
-                                                onClick={() => handleRatingClick(num)}
-                                                className={`rating-button aspect-square rounded-lg font-bold text-lg transition-all ${
-                                                    formData.rating === num.toString()
-                                                        ? 'bg-blue-600 text-white shadow-lg scale-110'
-                                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                                }`}
-                                            >
-                                                {num}
-                                            </button>
-                                        ))}
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            Property Address
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={formData.address}
+                                            onChange={(e) => handleInputChange('address', e.target.value)}
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            placeholder="123 Main Street, City, State"
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            Client Name
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={formData.client}
+                                            onChange={(e) => handleInputChange('client', e.target.value)}
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            placeholder="Client's name"
+                                        />
                                     </div>
                                 </div>
 
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                                        📸 Add Photos (Check Console for Logs)
-                                    </label>
-                                    <label className="flex items-center justify-center gap-3 px-4 py-8 border-2 border-dashed border-gray-300 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors cursor-pointer">
-                                        <Camera size={28} className="text-gray-400" />
-                                        <div className="text-center">
-                                            <span className="text-sm font-medium text-gray-700">
-                                                Tap to add photos
-                                            </span>
-                                            <p className="text-xs text-gray-500 mt-1">
-                                                Will be included in PDF
-                                            </p>
-                                        </div>
-                                        <input
-                                            type="file"
-                                            multiple
-                                            accept="image/*"
-                                            onChange={handlePhotoUpload}
-                                            className="hidden"
+                                {/* During Showing */}
+                                <div className="space-y-4">
+                                    <h2 className="text-xl font-bold text-gray-800 border-b-2 border-green-600 pb-2">
+                                        During Showing
+                                    </h2>
+
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            Capital Expenses Noted
+                                        </label>
+                                        <textarea
+                                            value={formData.capitalExpenses}
+                                            onChange={(e) => handleInputChange('capitalExpenses', e.target.value)}
+                                            rows="3"
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            placeholder="Roof needs replacement in 5 years, HVAC is 15 years old..."
                                         />
-                                    </label>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            Showing Notes
+                                        </label>
+                                        <textarea
+                                            value={formData.showingNotes}
+                                            onChange={(e) => handleInputChange('showingNotes', e.target.value)}
+                                            rows="4"
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            placeholder="Client reactions, observations, questions..."
+                                        />
+                                    </div>
+
+                                    {/* Photo Upload */}
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            📸 Add Photos
+                                        </label>
+                                        <label className="flex items-center justify-center gap-3 px-4 py-8 border-2 border-dashed border-gray-300 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors cursor-pointer">
+                                            <Camera size={28} className="text-gray-400" />
+                                            <div className="text-center">
+                                                <span className="text-sm font-medium text-gray-700">
+                                                    Tap to add photos
+                                                </span>
+                                                <p className="text-xs text-gray-500 mt-1">
+                                                    Photos will be included in PDF
+                                                </p>
+                                            </div>
+                                            <input
+                                                type="file"
+                                                multiple
+                                                accept="image/*"
+                                                onChange={handlePhotoUpload}
+                                                className="hidden"
+                                            />
+                                        </label>
+                                    </div>
                                 </div>
 
-                                {formData.attachments && formData.attachments.length > 0 && (
-                                    <div className="space-y-4">
-                                        <h2 className="text-lg font-bold text-gray-800 border-b-2 border-purple-600 pb-2 flex items-center gap-2">
-                                            <ImageIcon size={24} />
-                                            Attached Photos ({formData.attachments.length})
-                                        </h2>
-                                        
-                                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                                            {formData.attachments.map((photo, index) => (
-                                                <div key={index} className="relative group">
-                                                    <img
-                                                        src={photo.data || ''}
-                                                        alt={photo.name || 'Photo'}
-                                                        className="w-full h-40 object-cover rounded-lg border-2 border-gray-200"
-                                                    />
-                                                    <button
-                                                        onClick={() => removePhoto(index)}
-                                                        className="absolute top-2 right-2 bg-red-600 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-700"
-                                                    >
-                                                        <Trash size={16} />
-                                                    </button>
-                                                    <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 text-white text-xs p-2 rounded-b-lg">
-                                                        <p className="truncate">{photo.name || 'Unknown'}</p>
-                                                    </div>
-                                                </div>
+                                {/* After Showing */}
+                                <div className="space-y-4">
+                                    <h2 className="text-xl font-bold text-gray-800 border-b-2 border-orange-600 pb-2">
+                                        After Showing
+                                    </h2>
+
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            Value & Resale Opinion
+                                        </label>
+                                        <textarea
+                                            value={formData.valueOpinion}
+                                            onChange={(e) => handleInputChange('valueOpinion', e.target.value)}
+                                            rows="3"
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            placeholder="Assessment of property value and resale potential..."
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            Overall Experience
+                                        </label>
+                                        <textarea
+                                            value={formData.overallExperience}
+                                            onChange={(e) => handleInputChange('overallExperience', e.target.value)}
+                                            rows="3"
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            placeholder="Client's general impressions and feelings about the property..."
+                                        />
+                                    </div>
+
+                                    {/* Rating System */}
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-3">
+                                            Property Rating (1-10)
+                                        </label>
+                                        <div className="grid grid-cols-5 sm:grid-cols-10 gap-2">
+                                            {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((num) => (
+                                                <button
+                                                    key={num}
+                                                    onClick={() => handleRatingClick(num)}
+                                                    className={`rating-button aspect-square rounded-lg font-bold text-lg transition-all ${
+                                                        formData.rating === num.toString()
+                                                            ? 'bg-blue-600 text-white shadow-lg scale-110'
+                                                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                                    }`}
+                                                >
+                                                    {num}
+                                                </button>
                                             ))}
                                         </div>
-
-                                        <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
-                                            <p className="text-sm text-purple-800">
-                                                <strong>📸 {formData.attachments.length}</strong> photo(s) ready
+                                        {formData.rating && (
+                                            <p className="mt-2 text-sm text-gray-600">
+                                                {parseInt(formData.rating) > 7 
+                                                    ? '🟢 Strong interest - Follow up actively'
+                                                    : '🟡 Moderate interest - Continue search'}
                                             </p>
+                                        )}
+                                    </div>
+
+                                    {/* Pros & Cons */}
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-green-700 mb-1">
+                                                ✅ Pros
+                                            </label>
+                                            <textarea
+                                                value={formData.pros}
+                                                onChange={(e) => handleInputChange('pros', e.target.value)}
+                                                rows="4"
+                                                className="w-full px-3 py-2 border border-green-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent bg-green-50"
+                                                placeholder="What the client liked..."
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-red-700 mb-1">
+                                                ❌ Cons
+                                            </label>
+                                            <textarea
+                                                value={formData.cons}
+                                                onChange={(e) => handleInputChange('cons', e.target.value)}
+                                                rows="4"
+                                                className="w-full px-3 py-2 border border-red-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent bg-red-50"
+                                                placeholder="What the client didn't like..."
+                                            />
                                         </div>
                                     </div>
-                                )}
-                            </div>
+                                </div>
 
+                                {/* Follow-Up */}
+                                <div className="space-y-4">
+                                    <h2 className="text-xl font-bold text-gray-800 border-b-2 border-indigo-600 pb-2">
+                                        Follow-Up & Notes
+                                    </h2>
+
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            Follow-Up Notes
+                                        </label>
+                                        <textarea
+                                            value={formData.followUpNotes}
+                                            onChange={(e) => handleInputChange('followUpNotes', e.target.value)}
+                                            rows="3"
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            placeholder={formData.rating && parseInt(formData.rating) <= 7 
+                                                ? "What was learned from this showing for future search?"
+                                                : "Next steps and action items..."}
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            Additional Notes
+                                        </label>
+                                        <textarea
+                                            value={formData.additionalNotes}
+                                            onChange={(e) => handleInputChange('additionalNotes', e.target.value)}
+                                            rows="4"
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            placeholder="Any other observations or notes..."
+                                        />
+                                    </div>
+
+                                    {/* Photo Gallery */}
+                                    {formData.attachments && formData.attachments.length > 0 && (
+                                        <div className="space-y-4">
+                                            <h2 className="text-lg font-bold text-gray-800 border-b-2 border-purple-600 pb-2 flex items-center gap-2">
+                                                <ImageIcon size={24} />
+                                                Attached Photos ({formData.attachments.length})
+                                            </h2>
+                                            
+                                            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                                                {formData.attachments.map((photo, index) => (
+                                                    <div key={index} className="relative group">
+                                                        <img
+                                                            src={photo.data || ''}
+                                                            alt={photo.name || 'Photo'}
+                                                            className="w-full h-40 object-cover rounded-lg border-2 border-gray-200"
+                                                            onError={(e) => {
+                                                                e.target.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="%23ddd"/><text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="%23999">Error</text></svg>';
+                                                            }}
+                                                        />
+                                                        <button
+                                                            onClick={() => removePhoto(index)}
+                                                            className="absolute top-2 right-2 bg-red-600 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-700"
+                                                            title="Remove photo"
+                                                        >
+                                                            <Trash size={16} />
+                                                        </button>
+                                                        <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 text-white text-xs p-2 rounded-b-lg">
+                                                            <p className="truncate">{photo.name || 'Unknown'}</p>
+                                                            <p className="text-gray-300">{((photo.size || 0) / 1024).toFixed(1)} KB</p>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+
+                                            <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
+                                                <p className="text-sm text-purple-800">
+                                                    <strong>📸 {formData.attachments.length}</strong> photo(s) will be included in your PDF report
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                            </div>
                         </div>
 
+                        {/* Email Modal */}
                         {showEmailModal && (
                             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
                                 <div className="bg-white rounded-lg max-w-md w-full p-6 space-y-4">
@@ -709,9 +1085,10 @@
                             </div>
                         )}
 
+                        {/* Footer */}
                         <div className="max-w-2xl mx-auto p-4 text-center text-sm text-gray-500">
-                            <p>HSM Showing Consult v0.0.3 DEBUG</p>
-                            <p className="text-xs mt-1">Open Console (F12) to see detailed logs</p>
+                            <p>HSM Showing Buyer Consult v0.0.4 • Home Sweet Maine</p>
+                            <p className="text-xs mt-1">Using pdf-lib for reliable image handling</p>
                         </div>
                     </div>
                 </div>
